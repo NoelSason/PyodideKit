@@ -31,8 +31,9 @@ isn't. The [standard advice](https://github.com/pyodide/pyodide/discussions/4764
 is "run a local HTTP server, then try to get rid of it." Getting rid of it is
 the hard part, and it is only the first of several walls.
 
-This package is the far side of those walls, extracted from a shipping iPad app.
-The code is 1,000 lines; the value is in which 1,000.
+This package is the far side of those walls, extracted from
+[Lectra](https://www.canvascope.org/products/lectra), a shipping iPad app. The
+code is 1,000 lines; the value is in which 1,000.
 
 **The six things that cost real time:**
 
@@ -77,6 +78,27 @@ There is also a seventh, which is just arithmetic: the runtime is ~70 MB with
 the scientific stack. PyodideKit supports shipping it as an
 [On-Demand Resource](https://developer.apple.com/documentation/foundation/nsbundleresourcerequest)
 pack so it stays out of the initial app download.
+
+---
+
+## Where this came from
+
+PyodideKit is not a proof of concept. Every problem it solves was found the
+expensive way, in production, building
+**[Lectra](https://www.canvascope.org/products/lectra)** — an iPad app for
+Pencil notes, PDFs, and Python notebooks, shipping on the
+[App Store](https://apps.apple.com/us/app/lectra-notes/id6759754531).
+
+Lectra needed real Python on-device: students run pandas and matplotlib against
+their own coursework, on an iPad, often with no connection. Getting there meant
+working through the CORS wall, the ITMS-90035 rejection, the kernels that died
+silently in the background, and the keyboard that stopped working whenever the
+notebook was open. That code ran for real users before it became this package.
+
+I extracted the runtime layer and open sourced it because none of it was the
+interesting part of Lectra, and every iOS developer reaching for Pyodide has to
+rediscover the same six walls alone. There was no Swift package for this. Now
+there is one, and it is MIT — use it in anything, commercial or not.
 
 ---
 
