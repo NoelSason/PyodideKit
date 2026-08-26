@@ -1,0 +1,15 @@
+.DS_Store
+.build/
+.swiftpm/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+
+# Pyodide runtime assets are fetched, never committed.
+# See scripts/fetch-pyodide.sh and THIRD_PARTY_NOTICES.md.
+Runtime/
+*.whl
+*.wasm
+pyodide*.js
+pyodide-lock.json
+python_stdlib.zip

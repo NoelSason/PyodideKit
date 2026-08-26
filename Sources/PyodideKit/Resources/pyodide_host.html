@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<!--
+  pyodide_host.html — PyodideKit's invisible Python kernel host.
+
+  Loaded inside a hidden WKWebView (see PyodideKernel.swift). Every asset is
+  served over the app's custom scheme, so this runs with no network and no
+  local HTTP server. Swift drives execution by calling window.pyodideKitRun();
+  results come back through webkit.messageHandlers.pyodideKernel.
+-->
+<html>
+<head>
+  <meta charset="utf-8" />
+  <script src="/pyodide.js"></script>
+</head>
+<body>
+<script>
+  let pyodide = null;
+  let runner = null;
+
+  function post(msg) {
+    try { window.webkit.messageHandlers.pyodideKernel.postMessage(msg); } catch (e) {}
+  }
+
+  // The kernel bootstrap — persistent namespace plus a runner that captures
+  // stdout/stderr, the last-expression repr (Jupyter style), and tracebacks —
+  // is Python source, so it lives in PyodideKernel.swift and arrives as
+  // window.PYODIDEKIT_RUNNER_PY, injected at document start. It is deliberately
+  // not inlined here: App Store validation sniffs a bundled file containing
+  // Python source as an unsigned code object and rejects the upload with
+  // ITMS-90035.
+  async function init() {
+    try {
+      if (typeof window.PYODIDEKIT_RUNNER_PY !== "string") {
+        throw new Error("kernel bootstrap missing");
+      }
+      pyodide = await loadPyodide({
+        indexURL: "/",
+        stdin: () => {
+          const value = window.prompt("", "");
+          return value == null ? "" : String(value);
+        }
+      });
+      await pyodide.runPythonAsync(window.PYODIDEKIT_RUNNER_PY);
+      runner = pyodide.globals.get("__pk_run");
+      post({ type: "ready" });
+    } catch (e) {
+      post({ type: "fatal", error: String(e && e.message ? e.message : e) });
+    }
+  }
+
+  // Called from Swift. cellID correlates the async result with its caller.
+  window.pyodideKitRun = async function (cellID, code) {
+    if (!runner) {
+      post({ type: "result", cellID, stdout: "", stderr: "",
+             result: null, error: "Python is still starting. Try again in a moment." });
+      return;
+    }
+    try {
+      // Auto-load any bundled packages the code imports (numpy, pandas,
+      // matplotlib, …) before running it. A failure here is non-fatal: the
+      // import itself will raise a normal ModuleNotFoundError if the package
+      // isn't bundled, which is the right message to show the user.
+      try { await pyodide.loadPackagesFromImports(code); } catch (e) {}
+
+      const proxy = await runner(code);
+      const arr = proxy.toJs();
+      proxy.destroy();
+      const [stdout, stderr, result, error, images] = arr;
+      post({ type: "result", cellID,
+             stdout: stdout || "", stderr: stderr || "",
+             result: result || null, error: error || null,
+             images: images || [] });
+    } catch (e) {
+      post({ type: "result", cellID, stdout: "", stderr: "",
+             result: null, error: String(e && e.message ? e.message : e) });
+    }
+  };
+
+  // Called from Swift to clear the kernel namespace ("Restart kernel").
+  window.pyodideKitReset = async function () {
+    try { pyodide.runPython("__pk_reset()"); } catch (e) {}
+    post({ type: "reset" });
+  };
+
+  // --- Package install and file injection bridges ------------------------------
+  //
+  // The kernel ships a fixed wheel set; these let Swift install extra packages
+  // from PyPI via micropip and drop data files into the in-memory filesystem.
+
+  let micropipReady = null;
+  async function ensureMicropip() {
+    if (!micropipReady) {
+      micropipReady = (async () => {
+        await pyodide.loadPackage("micropip");
+        return pyodide.pyimport("micropip");
+      })();
+    }
+    return micropipReady;
+  }
+
+  // Write a file into Pyodide's FS from base64 bytes, creating parent dirs.
+  // Synchronous; returns true/false to the evaluateJavaScript completion.
+  window.pyodideKitWriteFile = function (path, b64) {
+    try {
+      const bin = atob(b64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const slash = path.lastIndexOf("/");
+      if (slash > 0) { try { pyodide.FS.mkdirTree(path.substring(0, slash)); } catch (e) {} }
+      pyodide.FS.writeFile(path, bytes);
+      return true;
+    } catch (e) {
+      return false;
+    }
+  };
+
+  // Install a package from PyPI. On success returns micropip's freeze() lockfile
+  // (JSON) so Swift can mirror the resolved wheel URLs into its offline cache.
+  window.pyodideKitInstall = async function (reqID, name) {
+    try {
+      const micropip = await ensureMicropip();
+      await micropip.install(name);
+      const freeze = micropip.freeze();
+      post({ type: "installed", reqID, name, freeze });
+    } catch (e) {
+      post({ type: "installError", reqID, name,
+             error: String(e && e.message ? e.message : e) });
+    }
+  };
+
+  // Install already-downloaded wheels from the FS (offline re-install at boot).
+  // `pathsJson` is a JSON array of emfs paths; dependency resolution is off
+  // because the whole closure is already cached.
+  window.pyodideKitInstallLocal = async function (reqID, pathsJson) {
+    try {
+      const micropip = await ensureMicropip();
+      const urls = JSON.parse(pathsJson).map((p) => "emfs:" + p);
+      if (urls.length) { await micropip.install.callKwargs(urls, { deps: false }); }
+      post({ type: "installedLocal", reqID });
+    } catch (e) {
+      post({ type: "installError", reqID,
+             error: String(e && e.message ? e.message : e) });
+    }
+  };
+
+  init();
+</script>
+</body>
+</html>
