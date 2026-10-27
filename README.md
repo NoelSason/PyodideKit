@@ -1,12 +1,33 @@
-# PyodideKit
+<p align="center">
+  <img src="docs/media/hero.png" alt="PyodideKit: real CPython inside your iOS, iPadOS, or Mac app. A Swift code window runs numpy and matplotlib through PyodideKernel, and an output window shows the damped sine wave that came back in r.images, captured on the iPhone 17 simulator." width="100%">
+</p>
 
-Run real CPython inside an iOS, iPadOS, or Mac app. No server, no network, no
-Python interpreter to embed and code-sign.
+<p align="center">
+  <b>Run real CPython inside an iOS, iPadOS, or Mac app, offline.</b><br>
+  PyodideKit runs Pyodide, CPython compiled to WebAssembly, in a hidden <code>WKWebView</code> and gives you a Swift API on top.
+</p>
 
-Python arrives as [Pyodide](https://pyodide.org) — CPython compiled to
-WebAssembly — and executes in a hidden `WKWebView`. Everything above that is
-Swift. NumPy, pandas, and matplotlib work. So does `pip install`, offline, on a
-plane.
+<p align="center">
+  <a href="https://github.com/NoelSason/PyodideKit/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/NoelSason/PyodideKit/actions/workflows/ci.yml/badge.svg"></a>
+  <img alt="Swift 5.9+" src="https://img.shields.io/badge/Swift-5.9%2B-F05138?logo=swift&logoColor=white">
+  <img alt="iOS 16, iPadOS 16, Mac Catalyst 16, macOS 13" src="https://img.shields.io/badge/platforms-iOS_16_%7C_iPadOS_16_%7C_Mac_Catalyst_16_%7C_macOS_13-lightgrey?logo=apple&logoColor=white">
+  <img alt="Pyodide 0.26.2" src="https://img.shields.io/badge/Pyodide-0.26.2-3776AB?logo=python&logoColor=white">
+  <img alt="Swift Package Manager" src="https://img.shields.io/badge/SwiftPM-compatible-F05138">
+  <img alt="MIT license" src="https://img.shields.io/badge/license-MIT-blue">
+  <img alt="Pre-release: no tagged version yet" src="https://img.shields.io/badge/status-pre--release-orange">
+</p>
+
+<p align="center">
+  <a href="#see-it-work">Demo</a> ·
+  <a href="#what-you-get-back">What you get back</a> ·
+  <a href="#how-it-works">How it works</a> ·
+  <a href="#install">Install</a> ·
+  <a href="#usage">Usage</a> ·
+  <a href="#limitations">Limitations</a>
+</p>
+
+> [!NOTE]
+> PyodideKit has no tagged release yet, so pin it to `main` or to a commit. The Pyodide runtime is not in this repository: [`scripts/fetch-pyodide.sh`](scripts/fetch-pyodide.sh) downloads it from upstream, and you bundle it with your app.
 
 ```swift
 import PyodideKit
@@ -15,133 +36,137 @@ let kernel = PyodideKernel()
 let result = await kernel.run("import numpy as np; np.arange(6).reshape(2, 3)")
 
 print(result.result ?? "")
-// [[0 1 2]
-//  [3 4 5]]
+// array([[0, 1, 2],
+//        [3, 4, 5]])
 ```
 
-One kernel is one persistent namespace, like a Jupyter kernel. State carries
-across `run` calls until you `restart()`.
+One kernel is one persistent namespace, like a Jupyter kernel. State carries across `run` calls until you call `restart()`.
 
----
+## Why
 
-## Why this exists
+Getting Pyodide to boot on iOS is quick. Keeping it working is the hard part. The [usual advice](https://github.com/pyodide/pyodide/discussions/4764) is to run a local HTTP server and then try to remove it. Removing it is the first of several problems, and each one shows up somewhere different: at boot, at App Store submission, in the background, or in the keyboard.
 
-Getting Pyodide to run on iOS is easy for about twenty minutes, and then it
-isn't. The [standard advice](https://github.com/pyodide/pyodide/discussions/4764)
-is "run a local HTTP server, then try to get rid of it." Getting rid of it is
-the hard part, and it is only the first of several walls.
+PyodideKit is the runtime layer from [Lectra](https://www.canvascope.org/products/lectra), an iPad app for Pencil notes, PDFs, and Python notebooks, extracted into a Swift package. It is about 1,000 lines of code. Most of the work went into the problems listed in [How it works](#how-it-works).
 
-This package is the far side of those walls, extracted from
-[Lectra](https://www.canvascope.org/products/lectra), a shipping iPad app. The
-code is 1,000 lines; the value is in which 1,000.
+## See it work
 
-**The six things that cost real time:**
+<p align="center">
+  <img src="docs/media/transcript.png" alt="Terminal-style transcript: after kernel.start(), status is ready; Python 3.12.1; 21 * 2 returns &quot;42&quot;; x = 42 returns nil; print(x * 5) writes 210 to stdout; top-level await returns 'done'; input() goes through promptHandler and prints Hello, Ada; cancelExecution() stops a while True loop and wasCancelled is true; the next run boots a fresh kernel and returns 42, and x is no longer defined." width="880">
+</p>
 
-1. **`file://` cannot work.** WebKit treats every `file://` origin as opaque, so
-   Pyodide's own `fetch()` of `pyodide.asm.wasm` fails CORS and the boot dies.
-   PyodideKit serves the assets over a registered custom scheme via
-   `WKURLSchemeHandler`, which gives the page a real origin. That is what makes
-   fully offline execution possible without a local HTTP server.
+<sub>Real output from PyodideKit on the iPhone 17 simulator (iOS 26.5), using the Pyodide 0.26.4 runtime. A small test harness, not part of this repository, made each call and printed the result. Tracebacks are shortened to their last line.</sub>
 
-2. **Bundling Python source gets your app rejected.** App Store validation
-   sniffs a bundled file containing Python source as an unsigned executable and
-   rejects the upload with **ITMS-90035**. This fails at submission, not at
-   build, which is a bad time to discover it. PyodideKit keeps the kernel
-   bootstrap as a Swift string literal and injects it with a `WKUserScript` at
-   `.atDocumentStart`, so it ships as data.
+## What you get back
 
-3. **iOS kills your kernel and never tells you.** The WebContent process is
-   reclaimed under memory pressure — routinely while backgrounded. The web view
-   stays alive and keeps accepting JavaScript, but the reply never comes and
-   your `await` hangs forever. PyodideKit handles
-   `webViewWebContentProcessDidTerminate` and arms a per-run inactivity watchdog
-   as a backstop.
+Every `run` returns a `PyodideRunResult`. It never throws.
 
-4. **An on-window web view eats your keyboard.** An attached `WKWebView` puts
-   its content view in the responder chain, where it swallows hardware-keyboard
-   modifiers from whatever text view the user is actually typing in. The kernel
-   view is deliberately never added to a window — it still executes JS and WASM,
-   because execution is all we need.
+<table>
+  <tr>
+    <td width="50%"><img src="docs/media/results.png" alt="Three calls: a numpy expression returns its array repr in .result, 21 * 2 returns &quot;42&quot;, and the statement x = 42 returns nil."></td>
+    <td width="50%"><img src="docs/media/errors.png" alt="kernel.run(&quot;1 / 0&quot;) returns a full Python traceback in .error, ending in ZeroDivisionError: division by zero."></td>
+  </tr>
+  <tr>
+    <td valign="top"><b>1. Results follow Jupyter rules.</b> A trailing expression comes back as its <code>repr</code> in <code>.result</code>. A trailing statement returns <code>nil</code>. Printed text goes to <code>.stdout</code> and <code>.stderr</code>.</td>
+    <td valign="top"><b>2. Errors are data.</b> A Python exception comes back as a formatted traceback in <code>.error</code>, because a failing cell is a normal outcome, not a crash.</td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/media/files.png" alt="kernel.writeFile puts rain.csv into the kernel, then pandas reads it and returns a table of mean and max rainfall for North and South stations."></td>
+    <td width="50%"><img src="docs/media/plots.png" alt="A matplotlib run returns one PNG in .images, shown decoded: a damped sine wave titled Drawn by matplotlib inside the app."></td>
+  </tr>
+  <tr>
+    <td valign="top"><b>3. Hand Python a file.</b> <code>writeFile</code> puts bytes into the kernel's in-memory file system, where <code>open()</code> and pandas can read them. The CSV here is sample data.</td>
+    <td valign="top"><b>4. Figures come back as PNGs.</b> matplotlib draws with the Agg backend, and every open figure returns as a base64 PNG in <code>.images</code>.</td>
+  </tr>
+</table>
 
-5. **`WKError 5` is not an error.** WebKit reports "JavaScript execution
-   returned a result of an unsupported type" whenever a script's completion
-   value can't be bridged — including every `async` function, which returns a
-   Promise. Treating that as failure silently discards runs that actually
-   succeeded.
+<sub>Rendered from a separate run on the same simulator. The values are copied from the returned <code>PyodideRunResult</code> fields; the figure is the decoded PNG from <code>.images</code>.</sub>
 
-6. **`pip install` has to survive a relaunch.** micropip resolves a dependency
-   closure at install time and reports it via `freeze()`. PyodideKit mirrors
-   those wheels to disk and re-installs them from the local filesystem at boot
-   with dependency resolution off, so the second launch needs no network.
+## How it works
 
-There is also a seventh, which is just arithmetic: the runtime is ~70 MB with
-the scientific stack. PyodideKit supports shipping it as an
-[On-Demand Resource](https://developer.apple.com/documentation/foundation/nsbundleresourcerequest)
-pack so it stays out of the initial app download.
+```mermaid
+sequenceDiagram
+  participant App as Your app
+  participant K as PyodideKernel
+  participant W as Hidden WKWebView
+  participant S as Scheme handler
+  App->>K: await kernel.run(code)
+  opt First run, or after a cancel
+    K->>W: load pyodidekit:///pyodide_host.html
+    Note over W: Python bootstrap injected at document start
+    W->>S: pyodide.js, pyodide.asm.wasm, stdlib
+    S-->>W: files from the app bundle or ODR pack
+    K->>W: reinstall any wheels cached on disk
+  end
+  K->>W: evaluateJavaScript: pyodideKitRun(id, code)
+  W->>S: wheels for any bundled packages the code imports
+  S-->>W: wheel files
+  W-->>K: script message: stdout, stderr, result, error, images
+  K-->>App: PyodideRunResult
+```
 
----
+`PyodideKernel` loads `pyodidekit:///pyodide_host.html` into a web view that is never shown. A custom URL scheme handler serves the host page from the package, and the runtime files from your app bundle or On-Demand Resource (ODR) pack. Swift sends code with `evaluateJavaScript`, and the result comes back through a script message handler.
 
-## Where this came from
+### The problems it solves
 
-PyodideKit is not a proof of concept. Every problem it solves was found the
-expensive way, in production, building
-**[Lectra](https://www.canvascope.org/products/lectra)** — an iPad app for
-Pencil notes, PDFs, and Python notebooks, shipping on the
-[App Store](https://apps.apple.com/us/app/lectra-notes/id6759754531).
+1. **`file://` can't load Pyodide.** WebKit treats every `file://` origin as opaque, so Pyodide's own `fetch()` of `pyodide.asm.wasm` fails CORS and the boot stops. PyodideKit serves the assets over a custom scheme registered with `WKURLSchemeHandler`. That gives the page a real origin, so the kernel runs offline without a local HTTP server.
+2. **Bundled Python source gets your upload rejected.** App Store validation treats a bundled file that contains Python source as an unsigned executable and rejects the upload with **ITMS-90035**. This fails at submission, not at build time. PyodideKit keeps the kernel bootstrap as a Swift string and injects it with a `WKUserScript` at `.atDocumentStart`, so it ships as data.
+3. **iOS can kill the kernel without telling you.** The system reclaims the WebContent process under memory pressure, often while the app is in the background. The web view still accepts JavaScript, but no reply ever comes, so an `await` would hang forever. PyodideKit handles `webViewWebContentProcessDidTerminate` and adds a per-run inactivity watchdog as a backstop.
+4. **A web view in a window takes your keyboard.** An attached `WKWebView` joins the responder chain and swallows hardware-keyboard modifiers from the text view the user is typing in. The kernel's web view is never added to a window. It still runs JavaScript and WebAssembly, which is all the kernel needs.
+5. **`WKError 5` is not a failure.** WebKit reports "JavaScript execution returned a result of an unsupported type" when it can't bridge a script's return value, including the Promise from every `async` function. Treating that as an error throws away runs that succeeded, so PyodideKit ignores it and waits for the real result message.
+6. **`pip install` has to survive a relaunch.** micropip resolves the dependency closure at install time and reports it with `freeze()`. PyodideKit copies the downloaded wheels to disk and reinstalls them from the local file system at boot, with dependency resolution off, so the next launch needs no network.
 
-Lectra needed real Python on-device: students run pandas and matplotlib against
-their own coursework, on an iPad, often with no connection. Getting there meant
-working through the CORS wall, the ITMS-90035 rejection, the kernels that died
-silently in the background, and the keyboard that stopped working whenever the
-notebook was open. That code ran for real users before it became this package.
+The runtime is about 70 MB with the scientific stack. To keep it out of the initial app download, PyodideKit can load it from an [On-Demand Resource](https://developer.apple.com/documentation/foundation/nsbundleresourcerequest) pack.
 
-I extracted the runtime layer and open sourced it because none of it was the
-interesting part of Lectra, and every iOS developer reaching for Pyodide has to
-rediscover the same six walls alone. There was no Swift package for this. Now
-there is one, and it is MIT — use it in anything, commercial or not.
+### What's in the package
 
----
+| Path | What it holds |
+|---|---|
+| [`PyodideKernel.swift`](Sources/PyodideKit/PyodideKernel.swift) | The kernel: boot, `run`, `install`, `writeFile`, cancel, the Python bootstrap, the message bridge, and the scheme handler |
+| [`PyodideConfiguration.swift`](Sources/PyodideKit/PyodideConfiguration.swift) | Asset source, URL scheme, wheel cache directory, and inactivity timeout |
+| [`PyodideRunResult.swift`](Sources/PyodideKit/PyodideRunResult.swift) | `PyodideRunResult`, `PyodideInstallResult`, and `PyodideError` |
+| [`PyodideAssetPack.swift`](Sources/PyodideKit/PyodideAssetPack.swift) | Finds runtime files in the bundle and owns the On-Demand Resource request |
+| [`PyodideWheelCache.swift`](Sources/PyodideKit/PyodideWheelCache.swift) | Offline cache of wheels installed with micropip |
+| [`BundledAssetServer.swift`](Sources/PyodideKit/BundledAssetServer.swift) | Reads runtime files off the main thread and answers WebKit's scheme tasks |
+| [`Resources/pyodide_host.html`](Sources/PyodideKit/Resources/pyodide_host.html) | The page the hidden web view loads |
+| [`scripts/fetch-pyodide.sh`](scripts/fetch-pyodide.sh) | Downloads a Pyodide release, checks its SHA-256, and stages the files to bundle |
 
 ## Install
 
+Add the package to `Package.swift`, or in Xcode with **File > Add Package Dependencies**:
+
 ```swift
-.package(url: "https://github.com/NoelSason/PyodideKit.git", from: "0.1.0")
+.package(url: "https://github.com/NoelSason/PyodideKit.git", branch: "main")
 ```
 
-Then fetch the runtime. It is not committed to this repo — it is upstream's to
-distribute, it is large, and a vendored copy would go stale:
+Then fetch the runtime. This repository doesn't include it: upstream distributes it, it is large, and a vendored copy would go stale.
 
 ```bash
 scripts/fetch-pyodide.sh
 ```
 
-That stages a `Runtime/` directory. Drag it into Xcode as a **folder reference**
-(blue, not yellow) named `Pyodide`, and confirm it landed in *Build Phases →
-Copy Bundle Resources*.
+The script downloads Pyodide 0.26.2 by default, checks it against [`scripts/pyodide-checksums.txt`](scripts/pyodide-checksums.txt), and stages a `Runtime/` directory. Drag `Runtime/` into Xcode as a **folder reference** (blue, not yellow) named `Pyodide`. Then confirm it appears in **Build Phases > Copy Bundle Resources**.
 
-To trim the download, pass the packages you actually need:
+To keep your app smaller, stage only the packages you need:
 
 ```bash
 scripts/fetch-pyodide.sh --packages "numpy,micropip"
 ```
 
----
+`--version` and `--out` choose a different Pyodide release and output folder.
 
 ## Usage
 
-### Running code
+### Run code
 
-`run` never throws. Python errors come back as data, because a failing cell is a
-normal outcome, not exceptional control flow:
+`run` never throws. Python errors come back as data:
 
 ```swift
 let result = await kernel.run("1 / 0")
-result.error      // "Traceback (most recent call last): ... ZeroDivisionError"
+result.error      // "Traceback (most recent call last): ... ZeroDivisionError: division by zero"
 result.stdout     // ""
 ```
 
-Results follow Jupyter semantics — a trailing *expression* reports its `repr`, a
-trailing *statement* reports nothing:
+A trailing expression reports its `repr`. A trailing statement reports nothing:
 
 ```swift
 await kernel.run("21 * 2").result   // "42"
@@ -151,13 +176,12 @@ await kernel.run("x = 42").result   // nil
 Top-level `await` works:
 
 ```swift
-await kernel.run("import asyncio; await asyncio.sleep(0.1); 'done'")
+await kernel.run("import asyncio; await asyncio.sleep(0.1); 'done'")   // .result is "'done'"
 ```
 
 ### Plots
 
-matplotlib is forced to the Agg backend before it can try to draw into a
-headless DOM. Figures come back as base64 PNGs:
+The kernel sets matplotlib to the Agg backend before matplotlib can try to draw into a page that has no display. Figures come back as base64 PNGs:
 
 ```swift
 let result = await kernel.run("""
@@ -170,30 +194,26 @@ if let png = result.images.first, let data = Data(base64Encoded: png) {
 }
 ```
 
-### Handing Python a file
+### Hand Python a file
 
 ```swift
 await kernel.writeFile(path: "data.csv", data: csvData)
 let result = await kernel.run("import pandas as pd; pd.read_csv('data.csv').describe()")
 ```
 
-### Installing packages
+### Install packages
 
 ```swift
 let installed = await kernel.install("cowsay")
 ```
 
-Pure-Python wheels and anything built for Pyodide's WASM target will install.
-Packages with C extensions that upstream hasn't built will not, and PyodideKit
-translates micropip's message into something a user can read.
+Pure-Python wheels and wheels built for Pyodide's WebAssembly target install. Packages with C extensions that upstream hasn't built don't, and PyodideKit turns micropip's error into a message a user can read.
 
-Installed wheels are mirrored to disk and reinstalled automatically on the next
-boot, with no network.
+PyodideKit copies installed wheels to disk and reinstalls them on the next boot without a network.
 
 ### `input()`
 
-Python's `input()` is bridged to a callback so you can present whatever UI you
-like. Pass `nil` to raise `EOFError` in the running code:
+Python's `input()` calls `promptHandler`, so you can show any UI you like. Pass `nil` to raise `EOFError` in the running code:
 
 ```swift
 kernel.promptHandler = { prompt, defaultValue, respond in
@@ -201,19 +221,17 @@ kernel.promptHandler = { prompt, defaultValue, respond in
 }
 ```
 
-### Stopping runaway code
+If you don't set a handler, `input()` returns the default value.
 
-Pyodide cannot preempt arbitrary CPython — a `while True:` never yields back to
-the JS event loop — so the only dependable stop boundary is discarding the page:
+### Stop runaway code
+
+Pyodide can't interrupt running CPython: a `while True:` loop never yields back to the JavaScript event loop. The only dependable way to stop it is to discard the page:
 
 ```swift
 kernel.cancelExecution()
 ```
 
-Every in-flight call resolves with `wasCancelled == true`. **Discard those
-results rather than displaying them**; they are transport state, not output. The
-next `run` boots a fresh kernel automatically. Cancelling the enclosing Swift
-`Task` does the same thing.
+Every pending call returns with `wasCancelled == true`. **Discard those results instead of showing them**; they describe the cancellation, not output. The next `run` boots a fresh kernel with an empty namespace. Cancelling the enclosing Swift `Task` does the same thing.
 
 ### On-Demand Resources
 
@@ -225,75 +243,54 @@ let kernel = PyodideKernel(configuration: PyodideConfiguration(
 // Explicit use: download with progress.
 try await kernel.start(downloadPolicy: .download)
 
-// Passive warming: start only if the pack is already on device, so opening a
-// .py file never triggers a 70 MB download the user didn't ask for.
+// Passive warming: start only if the pack is already on the device, so opening
+// a .py file never starts a 70 MB download the user didn't ask for.
 try await kernel.start(downloadPolicy: .useIfPresent)
 ```
 
-Observe `kernel.downloadProgress` to show a progress bar.
+To show a progress bar, observe `kernel.downloadProgress`.
 
-> Xcode serves ODR packs from a local server while the device is attached to the
-> debugger. That server vanishes the moment you unplug, and every Python run
-> then fails with a connection error that looks nothing like the actual cause.
-> Set **Embed Asset Packs In Product Bundle** for Debug builds.
+> [!WARNING]
+> While a device is attached to the debugger, Xcode serves On-Demand Resource packs from a local server. That server disappears when you unplug, and every Python run then fails with a connection error that doesn't point at the cause. For Debug builds, turn on **Embed Asset Packs In Product Bundle**.
 
----
-
-## Configuration
+### Configuration
 
 ```swift
 PyodideConfiguration(
     assetBundle: .main,
     assetSource: .bundled(subdirectory: "Pyodide"),
     scheme: "pyodidekit",          // must be unique to your app
-    wheelCacheDirectory: nil,      // defaults to Application Support
-    runInactivityTimeout: 180
+    wheelCacheDirectory: nil,      // defaults to Application Support/PyodideKit/wheels
+    runInactivityTimeout: 180      // seconds a run can go without a reply
 )
 ```
 
-Change `scheme` if you register another custom scheme, or if you run more than
-one kernel from different asset sets.
-
----
+If you register another custom scheme, or run more than one kernel from different asset sets, change `scheme`.
 
 ## Requirements
 
-iOS 16+ · iPadOS 16+ · Mac Catalyst 16+ · macOS 13+ · Swift 5.9+
+- iOS 16, iPadOS 16, Mac Catalyst 16, or macOS 13 and later
+- Swift 5.9 or later
 
-On macOS there are no On-Demand Resources, so `.onDemandResource` degrades to a
-plain bundle lookup.
-
----
+macOS has no On-Demand Resources, so `.onDemandResource` falls back to a plain bundle lookup there.
 
 ## Performance
 
-No benchmarks are published here yet, because none have been run rigorously
-enough to quote. The shape of the cost, though, is worth knowing before you
-design around it:
+No benchmarks are published here, because none have been run carefully enough to quote. Two patterns are worth knowing before you design around the kernel:
 
-- **Boot dominates everything.** Instantiating the WASM kernel is orders of
-  magnitude more expensive than executing code in it, and importing a large
-  package like pandas is expensive again on first use.
-- **Execution afterwards is cheap.** A warm kernel running small snippets is not
-  where your time goes.
+- **Boot and first imports cost the most.** Starting the WebAssembly kernel costs far more than running code in it, and the first import of a large package like pandas is expensive again.
+- **A warm kernel is cheap.** Running small snippets in a kernel that is already up is not where the time goes.
 
-The practical consequence: start the kernel before the user needs it, and keep
-one alive rather than creating one per execution. `start()` is safe to call
-early and repeatedly — concurrent callers share a single boot.
+Start the kernel before the user needs it, and keep one alive instead of creating one per run. `start()` is safe to call early and more than once; concurrent callers share a single boot.
 
 Contributions of real measurements are welcome.
 
 ## Limitations
 
-- **No threading, no subprocesses, no sockets.** This is WASM in a browser
-  engine. `requests` will not work; use `pyodide.http` or do networking in Swift.
-- **Only Pyodide-compatible wheels.** Pure Python always; C extensions only if
-  upstream built them for the WASM target.
-- **Memory is bounded by the WebContent process.** Large DataFrames will get you
-  reclaimed.
-- **Not a security sandbox against the host app.** It is a WASM sandbox, which
-  is a real boundary for the *Python* code, but treat untrusted input with the
-  same care you would anywhere else.
+- **No threads, subprocesses, or sockets.** This is WebAssembly in a browser engine. `requests` doesn't work; use `pyodide.http` or do networking in Swift.
+- **Only Pyodide-compatible wheels.** Pure-Python packages always work. Packages with C extensions work only if upstream built them for the WebAssembly target.
+- **Memory is bounded by the WebContent process.** A large DataFrame can get the process reclaimed.
+- **Not a security boundary against the host app.** The WebAssembly sandbox is a real boundary for the Python code, but treat untrusted input with the same care you would anywhere else.
 
 ## Testing
 
@@ -301,16 +298,18 @@ Contributions of real measurements are welcome.
 swift test
 ```
 
-Unit tests run anywhere. The end-to-end kernel tests skip unless the Pyodide
-assets are staged into a bundle — run them from an app target to exercise them
-for real.
+The 6 unit tests run anywhere, including CI. The 8 end-to-end kernel tests skip unless the Pyodide runtime is staged into a bundle; to exercise them, run them from an app target that bundles the runtime.
+
+## Where it came from
+
+Every problem in [How it works](#how-it-works) came up while building [Lectra](https://www.canvascope.org/products/lectra), an iPad app for Pencil notes, PDFs, and Python notebooks that is [on the App Store](https://apps.apple.com/us/app/lectra-notes/id6759754531). Lectra runs pandas and matplotlib on the device, often with no connection, so it needed Python that works offline, passes App Store review, and survives being backgrounded.
+
+The runtime layer wasn't specific to Lectra, and there was no Swift package for it, so it became this one. Noel Sason wrote and maintains it.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).
 
-Pyodide and the Python packages it loads are **not** redistributed here and
-carry their own licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+This repository does not redistribute Pyodide or the Python packages it loads, and they carry their own licenses. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-PyodideKit is an independent wrapper and is not affiliated with the Pyodide
-project.
+PyodideKit is an independent wrapper and is not affiliated with the Pyodide project.
